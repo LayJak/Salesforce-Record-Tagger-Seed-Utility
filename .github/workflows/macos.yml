@@ -23,13 +23,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies with pinned versions
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # FIX 1: Pin to known stable versions and add community hooks
-          pip install PySide6 Pillow
-          pip install pandas==2.2.2 numpy==1.26.4
-          pip install pyinstaller==6.8.0 pyinstaller-hooks-contrib
+          # Use the latest stable versions of all libraries
+          pip install PySide6 pandas Pillow numpy pyinstaller
 
       - name: Create .icns from .png (Robust Method)
         run: |
@@ -47,7 +45,7 @@ jobs:
           "
           iconutil -c icns icon.iconset -o app_icon.icns
 
-      - name: Build macOS App with PyInstaller (Aggressive Bundling)
+      - name: Build macOS App with PyInstaller (Simplified Command)
         run: |
           pyinstaller Tagger.py \
             --name "SF Tagger" \
@@ -55,9 +53,6 @@ jobs:
             --windowed \
             --icon="app_icon.icns" \
             --collect-data pandas \
-            --copy-metadata numpy \
-            --copy-metadata pandas \
-            --collect-submodules numpy \
             --hidden-import=numpy
 
       - name: Create DMG
