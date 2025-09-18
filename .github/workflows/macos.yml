@@ -9,7 +9,7 @@ jobs:
   build:
     strategy:
       matrix:
-        runner: [macos-14, macos-13]   # 14=arm64, 13=x86_64
+        runner: [macos-14, macos-13]   # 14 = Apple Silicon (arm64), 13 = Intel (x86_64)
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -31,7 +31,8 @@ jobs:
           else
             pip install PySide6 pandas
           fi
-          pip install pyinstaller
+          # Pin a known-good PyInstaller to reduce surprises
+          pip install "pyinstaller==6.7.0"
 
       # Optional: build a .icns from PNG if you have assets/icon.png
       - name: Generate .icns (optional)
@@ -51,15 +52,14 @@ jobs:
           cat > sftagger.spec << 'PYI'
           # -*- mode: python ; coding: utf-8 -*-
           import os
-          from PyInstaller.utils.hooks import collect_data_files, get_package_paths
+          from PyInstaller.utils.hooks import collect_data_files, get_package_paths, collect_dynamic_libs
           from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
-          from PyInstaller.utils.hooks import collect_dynamic_libs
           from PyInstaller.building.datastruct import Tree
 
           APP_NAME = "SF Tagger"
           SCRIPT = "Tagger.py"
 
-          # Exclude heavy/unused PySide6 modules to prevent Qt3D/WebEngine framework collisions
+          # Exclude heavy/unused PySide6 modules (prevents Qt3D/WebEngine collisions & shrinks app)
           EXCLUDES = [
               "PySide6.Qt3DAnimation","PySide6.Qt3DCore","PySide6.Qt3DRender","PySide6.Qt3DExtras","PySide6.Qt3DInput","PySide6.Qt3DLogic",
               "PySide6.QtWebEngineCore","PySide6.QtWebEngineWidgets","PySide6.QtWebEngineQuick",
@@ -71,11 +71,10 @@ jobs:
               "PySide6.QtSvg","PySide6.QtSvgWidgets","PySide6.QtTextToSpeech","PySide6.QtUiTools",
               "PySide6.QtWebSockets","PySide6.QtWebView",
               "PySide6.scripts","PySide6.scripts.deploy","PySide6.scripts.deploy_lib","PySide6.scripts.project","PySide6.scripts.project_lib",
-              "PySide6.QtDBus","PySide6.QtSql",   # drop SQL drivers
-              "jinja2"
+              "PySide6.QtDBus","PySide6.QtSql",
+              "jinja2",
           ]
 
-          # Base analysis
           a = Analysis(
               [SCRIPT],
               pathex=[],
@@ -92,28 +91,25 @@ jobs:
           # Include pandas data
           a.datas += collect_data_files("pandas")
 
-          # Discover PySide6 package path, then include only needed Qt plugins
+          # Only include essential Qt plugins via Tree copy
           pkg_base, pkg_dir = get_package_paths("PySide6")
           qt_plugins_dir = os.path.join(pkg_dir, "Qt", "plugins")
-          needed = ["platforms", "styles", "imageformats", "printsupport"]
-          for sub in needed:
+          for sub in ["platforms", "styles", "imageformats", "printsupport"]:
               src = os.path.join(qt_plugins_dir, sub)
               if os.path.isdir(src):
-                  # Place under PySide6/Qt/plugins/<sub> inside the bundle
                   a.datas += Tree(src, prefix=os.path.join("PySide6", "Qt", "plugins", sub))
 
-          # (Optional) include PySide6 shared libs if PyInstaller misses any
+          # Ensure PySide6 shared libs are present
           a.binaries += collect_dynamic_libs("PySide6")
 
           pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
+          # IMPORTANT: exclude_binaries=True so binaries/datas go only into COLLECT
           exe = EXE(
               pyz,
               a.scripts,
-              a.binaries,
-              a.zipfiles,
-              a.datas,
               [],
+              exclude_binaries=True,
               name=APP_NAME,
               debug=False,
               bootloader_ignore_signals=False,
