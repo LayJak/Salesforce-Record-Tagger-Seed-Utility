@@ -2,18 +2,22 @@ name: macos-build-dmg-and-release
 
 on:
   push:
-    tags: ["v*.*.*"]       # push a tag (e.g., v1.0.0) to build & publish a Release
-  workflow_dispatch:       # allow manual runs for testing (will not publish a Release)
+    tags: ["v*.*.*"]           # push v1.0.0, v1.0.1, etc. to auto-publish a Release
+  workflow_dispatch:           # manual runs; you can optionally provide a tag
+    inputs:
+      tag_name:
+        description: "Release tag to publish (e.g., v1.0.0). Leave blank to only build artifacts."
+        required: false
+        default: ""
 
-# Needed so the workflow can create Releases
 permissions:
-  contents: write
+  contents: write              # required for creating/updating releases
 
 jobs:
   build:
     strategy:
       matrix:
-        runner: [macos-14, macos-13]   # macos-14 = Apple Silicon (arm64), macos-13 = Intel (x86_64)
+        runner: [macos-14, macos-13]   # 14 = Apple Silicon (arm64), 13 = Intel (x86_64)
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -35,9 +39,10 @@ jobs:
           else
             pip install PySide6 pandas
           fi
+          # PyInstaller 6.7.0 is stable for this project
           pip install "pyinstaller==6.7.0"
 
-      # Optional: build an .icns from assets/icon.png (if present)
+      # Optional: build .icns from icon.png if you don't have an .icns
       - name: Generate .icns (optional)
         run: |
           if [ -f "assets/icon.png" ]; then
@@ -50,11 +55,12 @@ jobs:
             rm -rf icon.iconset
           fi
 
-      - name: Build .app with PyInstaller (lean, no collect-all)
+      - name: Build .app with PyInstaller (lean)
         run: |
           ICON_FLAG=""
           if [ -f "assets/icon.icns" ]; then ICON_FLAG="--icon assets/icon.icns"; fi
 
+          # Exclude lots of Qt modules we don't use to keep size reasonable
           EXCLUDES=(
             PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DRender PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic
             PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
@@ -81,35 +87,54 @@ jobs:
             $ICON_FLAG \
             $EXCLUDE_FLAGS
 
-          echo "dist contents:"
+          echo "dist:"
           ls -la dist || true
 
-      - name: Create DMG (prefer create-dmg, fallback to hdiutil)
+      - name: Create DMG (robust: clean mounts, overwrite, retry)
         run: |
           set -e
           DMG="dist/SF_Tagger-${{ matrix.runner }}.dmg"
+          VOL="SF Tagger"
+
+          mkdir -p dist
+          rm -f "$DMG"
+
+          if [ -d "/Volumes/$VOL" ]; then
+            hdiutil detach "/Volumes/$VOL" || diskutil unmount force "/Volumes/$VOL" || true
+            sleep 2
+          fi
 
           if command -v brew >/dev/null 2>&1; then
             brew install create-dmg || true
           fi
 
-          if command -v create-dmg >/dev/null 2>&1; then
-            echo "Using create-dmg..."
-            create-dmg \
-              --volname "SF Tagger" \
-              --window-pos 200 120 \
-              --window-size 600 400 \
-              --icon-size 128 \
-              --icon "SF Tagger.app" 160 200 \
-              --app-drop-link 440 200 \
-              "$DMG" \
-              "dist/SF Tagger.app"
-          else
-            echo "Using hdiutil..."
-            hdiutil create -volname "SF Tagger" \
-              -srcfolder "dist/SF Tagger.app" \
-              -ov -format UDZO "$DMG"
+          make_dmg() {
+            if command -v create-dmg >/dev/null 2>&1; then
+              create-dmg --overwrite \
+                --volname "$VOL" \
+                --window-pos 200 120 \
+                --window-size 600 400 \
+                --icon-size 128 \
+                --icon "SF Tagger.app" 160 200 \
+                --app-drop-link 440 200 \
+                "$DMG" "dist/SF Tagger.app"
+            else
+              hdiutil create -volname "$VOL" \
+                -srcfolder "dist/SF Tagger.app" \
+                -ov -format UDZO "$DMG"
+            fi
+          }
+
+          if ! make_dmg; then
+            echo "Retrying DMG creation…"
+            rm -f "$DMG" || true
+            if [ -d "/Volumes/$VOL" ]; then
+              hdiutil detach "/Volumes/$VOL" || diskutil unmount force "/Volumes/$VOL" || true
+              sleep 2
+            fi
+            make_dmg
           fi
+
           ls -la dist
 
       - name: Upload DMG artifact
@@ -122,8 +147,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    # Only publish a Release when the workflow was started by a tag
-    if: startsWith(github.ref, 'refs/tags/')
+    # Publish when run by a tag push OR when a manual run provides tag_name
+    if: startsWith(github.ref, 'refs/tags/') || inputs.tag_name != ''
 
     steps:
       - name: Download all DMG artifacts
@@ -132,21 +157,33 @@ jobs:
           pattern: SF_Tagger_*
           merge-multiple: true
 
-      - name: List files
-        run: ls -la
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            echo "name=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Generate checksums (optional)
+      - name: Generate checksums
         run: |
           shasum -a 256 SF_Tagger-*.dmg > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create GitHub Release and upload assets
+      - name: Create/Update GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
           files: |
             SF_Tagger-*.dmg
             SHA256SUMS.txt
           draft: false
           prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          allowUpdates: true     # <—— will attach to an existing release for same tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
