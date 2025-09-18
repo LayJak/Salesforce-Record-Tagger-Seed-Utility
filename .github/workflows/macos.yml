@@ -2,7 +2,7 @@ name: macos-build-dmg-unsigned
 
 on:
   push:
-    tags: ["v*.*.*"]     # e.g. v1.0.0
+    tags: ["v*.*.*"]   # e.g. v1.0.0
   workflow_dispatch:
 
 jobs:
@@ -46,40 +46,106 @@ jobs:
             rm -rf icon.iconset
           fi
 
-      - name: Build .app with PyInstaller (exclude unused PySide6 modules)
+      - name: Write minimal PyInstaller spec (avoid Qt symlink collisions)
         run: |
-          ICON_FLAG=""
-          if [ -f "assets/icon.icns" ]; then ICON_FLAG="--icon assets/icon.icns"; fi
+          cat > sftagger.spec << 'PYI'
+          # -*- mode: python ; coding: utf-8 -*-
+          import sys, os
+          from PyInstaller.utils.hooks import collect_data_files, collect_qt_plugins
 
-          # Exclude big/unused Qt modules that can cause framework symlink collisions
-          EXCLUDES=(
-            PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DRender PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic
-            PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
-            PySide6.QtQuick PySide6.QtQuickWidgets PySide6.QtQuick3D PySide6.QtQuickControls2 PySide6.QtQuickTest
-            PySide6.QtBluetooth PySide6.QtCharts PySide6.QtDataVisualization PySide6.QtGraphs PySide6.QtGraphsWidgets
-            PySide6.QtHelp PySide6.QtHttpServer PySide6.QtLocation PySide6.QtNfc PySide6.QtPositioning
-            PySide6.QtPdf PySide6.QtPdfWidgets PySide6.QtRemoteObjects PySide6.QtScxml PySide6.QtSensors
-            PySide6.QtSerialBus PySide6.QtSerialPort PySide6.QtSpatialAudio PySide6.QtStateMachine
-            PySide6.QtSvg PySide6.QtSvgWidgets PySide6.QtTextToSpeech PySide6.QtUiTools
-            PySide6.QtWebSockets PySide6.QtWebView
-            PySide6.scripts PySide6.scripts.deploy PySide6.scripts.deploy_lib PySide6.scripts.project PySide6.scripts.project_lib
-            PySide6.QtDBus PySide6.QtSql   # drop DB/SQL drivers (removes sqldrivers warnings)
+          app_name = "SF Tagger"
+          script = "Tagger.py"
+
+          # Exclude heavy/unused PySide6 modules that can pull in extra frameworks
+          EXCLUDES = [
+              "PySide6.Qt3DAnimation","PySide6.Qt3DCore","PySide6.Qt3DRender","PySide6.Qt3DExtras","PySide6.Qt3DInput","PySide6.Qt3DLogic",
+              "PySide6.QtWebEngineCore","PySide6.QtWebEngineWidgets","PySide6.QtWebEngineQuick",
+              "PySide6.QtQuick","PySide6.QtQuickWidgets","PySide6.QtQuick3D","PySide6.QtQuickControls2","PySide6.QtQuickTest",
+              "PySide6.QtBluetooth","PySide6.QtCharts","PySide6.QtDataVisualization","PySide6.QtGraphs","PySide6.QtGraphsWidgets",
+              "PySide6.QtHelp","PySide6.QtHttpServer","PySide6.QtLocation","PySide6.QtNfc","PySide6.QtPositioning",
+              "PySide6.QtPdf","PySide6.QtPdfWidgets","PySide6.QtRemoteObjects","PySide6.QtScxml","PySide6.QtSensors",
+              "PySide6.QtSerialBus","PySide6.QtSerialPort","PySide6.QtSpatialAudio","PySide6.QtStateMachine",
+              "PySide6.QtSvg","PySide6.QtSvgWidgets","PySide6.QtTextToSpeech","PySide6.QtUiTools",
+              "PySide6.QtWebSockets","PySide6.QtWebView",
+              "PySide6.scripts","PySide6.scripts.deploy","PySide6.scripts.deploy_lib","PySide6.scripts.project","PySide6.scripts.project_lib",
+              "PySide6.QtDBus","PySide6.QtSql",  # drop SQL (avoids qsql* driver deps)
+              "jinja2"  # not used; PyInstaller warned about it
+          ]
+
+          block_cipher = None
+
+          a = Analysis(
+              [script],
+              pathex=[],
+              binaries=[],
+              datas=[],
+              hiddenimports=[],
+              hookspath=[],
+              hooksconfig={},
+              runtime_hooks=[],
+              excludes=EXCLUDES,
+              noarchive=False,
           )
 
-          EXCLUDE_FLAGS=""
-          for m in "${EXCLUDES[@]}"; do
-            EXCLUDE_FLAGS="$EXCLUDE_FLAGS --exclude-module $m"
-          done
+          # pandas data files
+          a.datas += collect_data_files('pandas')
 
-          pyinstaller Tagger.py \
-            --name "SF Tagger" \
-            --windowed \
-            $ICON_FLAG \
-            --noconfirm \
-            --collect-all PySide6 \
-            --collect-data pandas \
-            $EXCLUDE_FLAGS
+          # Only the Qt plugins we need for a widgets app
+          # (platforms, styles, imageformats, printsupport)
+          qt_plugins = ['platforms', 'styles', 'imageformats', 'printsupport']
+          for _name, files in collect_qt_plugins('PySide6', qt_plugins).items():
+              # files is a list of (dest_dir, src_file) tuples; PyInstaller handles them
+              a.binaries += files
 
+          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+          # EXE target (console=False => windowed)
+          exe = EXE(
+              pyz,
+              a.scripts,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              [],
+              name=app_name,
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=False,
+              upx_exclude=[],
+              runtime_tmpdir=None,
+              console=False,
+              disable_windowed_traceback=False,
+              argv_emulation=False,
+              target_arch=None,
+          )
+
+          # macOS .app bundle
+          app = BUNDLE(
+              exe,
+              name=f"{app_name}.app",
+              icon="assets/icon.icns" if os.path.exists("assets/icon.icns") else None,
+              bundle_identifier="com.northrop.sftagger",
+              info_plist={
+                  "NSHighResolutionCapable": True,
+              },
+          )
+
+          coll = COLLECT(
+              app,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              strip=False,
+              upx=False,
+              upx_exclude=[],
+              name=app_name,
+          )
+          PYI
+
+      - name: Build .app with PyInstaller (using spec)
+        run: |
+          pyinstaller --clean sftagger.spec
           echo "Built files in dist/:"
           ls -la "dist"
 
