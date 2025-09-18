@@ -17,7 +17,7 @@ jobs:
   build:
     strategy:
       matrix:
-        runner: [macos-14, macos-13]   # macos-14 = Apple Silicon (arm64), macos-13 = Intel (x86_64)
+        runner: [macos-14, macos-13]   # 14: Apple Silicon, 13: Intel
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -41,7 +41,7 @@ jobs:
           else
             pip install PySide6 pandas
           fi
-          # Pin a PyInstaller known-good for PySide6 on macOS
+          # PyInstaller + contrib hooks (collect-qt-plugins support)
           pip install "pyinstaller==6.7.0" "pyinstaller-hooks-contrib>=2024.7"
 
       # Optional: auto-generate .icns if you only have assets/icon.png
@@ -58,22 +58,56 @@ jobs:
             rm -rf icon.iconset
           fi
 
-      - name: Build .app with PyInstaller (per-arch)
+      - name: Build .app with PyInstaller (lean + explicit Qt plugins)
         env:
-          MACOSX_DEPLOYMENT_TARGET: "12.0"   # runs fine on Sequoia and back to Monterey
+          MACOSX_DEPLOYMENT_TARGET: "12.0"   # safe baseline for Sequoia+
         shell: bash
         run: |
           set -e
+          # Clean previous outputs/spec so hooks don't collide
+          rm -rf build dist "SF Tagger.spec" || true
+
           ICON_FLAG=""
           [ -f "assets/icon.icns" ] && ICON_FLAG="--icon assets/icon.icns"
 
-          # Bundle ALL Qt/PySide6 components to avoid “Qt platform plugin cocoa” issues
+          # Exclude *all* optional Qt modules we don't use (prevents Qt3D symlink collision)
+          EXCLUDES=(
+            PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic PySide6.Qt3DRender
+            PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
+            PySide6.QtQuick PySide6.QtQuickWidgets PySide6.QtQuick3D PySide6.QtQuickControls2 PySide6.QtQuickTest
+            PySide6.QtQml
+            PySide6.QtBluetooth PySide6.QtCharts PySide6.QtDataVisualization PySide6.QtGraphs PySide6.QtGraphsWidgets
+            PySide6.QtHelp PySide6.QtHttpServer PySide6.QtLocation PySide6.QtNfc PySide6.QtPositioning
+            PySide6.QtMultimedia PySide6.QtMultimediaWidgets
+            PySide6.QtNetworkAuth
+            PySide6.QtOpenGL PySide6.QtOpenGLWidgets
+            PySide6.QtPdf PySide6.QtPdfWidgets
+            PySide6.QtRemoteObjects PySide6.QtScxml PySide6.QtSensors
+            PySide6.QtSerialBus PySide6.QtSerialPort PySide6.QtSpatialAudio
+            PySide6.QtStateMachine
+            PySide6.QtSvg PySide6.QtSvgWidgets
+            PySide6.QtTextToSpeech PySide6.QtTest
+            PySide6.QtUiTools
+            PySide6.QtWebChannel PySide6.QtWebSockets PySide6.QtWebView
+            PySide6.QtXml
+            PySide6.QtSql
+            PySide6.scripts PySide6.scripts.deploy PySide6.scripts.deploy_lib PySide6.scripts.project PySide6.scripts.project_lib
+            PySide6.support PySide6.support.deprecated PySide6.support.generate_pyi
+            jinja2
+          )
+          EXCLUDE_FLAGS=""
+          for m in "${EXCLUDES[@]}"; do
+            EXCLUDE_FLAGS="$EXCLUDE_FLAGS --exclude-module $m"
+          done
+
+          # Collect only essential Qt plugins so the app starts cleanly on all Macs
           pyinstaller Tagger.py \
             --name "SF Tagger" \
             --windowed \
             --noconfirm \
             $ICON_FLAG \
-            --collect-all PySide6 \
+            $EXCLUDE_FLAGS \
+            --collect-qt-plugins=platforms,imageformats,styles,tls \
             --collect-data pandas
 
           echo "Built app:"
@@ -144,7 +178,6 @@ jobs:
       - name: Rename assets for clarity
         shell: bash
         run: |
-          # macos-14 = Apple Silicon, macos-13 = Intel
           [ -f SF_Tagger-macos-14.dmg ] && mv -f SF_Tagger-macos-14.dmg SF_Tagger-mac-AppleSilicon.dmg || true
           [ -f SF_Tagger-macos-13.dmg ] && mv -f SF_Tagger-macos-13.dmg SF_Tagger-mac-Intel.dmg || true
           ls -la
@@ -163,11 +196,14 @@ jobs:
           body: |
             **SF Tagger – Bulk Salesforce Record Tagger**
 
-            - Two macOS builds:
-              - **SF_Tagger-mac-AppleSilicon.dmg** (M1/M2/M3)
-              - **SF_Tagger-mac-Intel.dmg** (Intel Macs)
-            - App is **unsigned** (standard Gatekeeper prompt on first run).
-            - Install: open DMG → drag **SF Tagger.app** to Applications → right-click **Open** once.
+            macOS installers:
+            - **SF_Tagger-mac-AppleSilicon.dmg** (M1/M2/M3)
+            - **SF_Tagger-mac-Intel.dmg** (Intel Macs)
+
+            How to install:
+            1) Open the DMG
+            2) Drag **SF Tagger.app** to Applications
+            3) First launch: right-click → **Open** → **Open** (unsigned, one-time Gatekeeper prompt)
           files: |
             SF_Tagger-mac-AppleSilicon.dmg
             SF_Tagger-mac-Intel.dmg
