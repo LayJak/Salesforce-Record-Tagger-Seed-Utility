@@ -7,6 +7,10 @@ on:
       - 'v*.*.*'  # Trigger on tags like v1.0, v1.2.3
   workflow_dispatch: # Allows manual runs from the Actions tab
 
+# FIX: Grant the workflow permission to create and update releases
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     runs-on: macos-latest # Use the latest available macOS runner
@@ -31,24 +35,14 @@ jobs:
           python -c "
           from PIL import Image
           import os
-
           source_image = 'icon.png'
           iconset_dir = 'icon.iconset'
           os.makedirs(iconset_dir, exist_ok=True)
-
           img = Image.open(source_image)
           sizes = [16, 32, 128, 256, 512]
-
           for size in sizes:
-              # Standard icon
-              resized_img = img.resize((size, size), Image.Resampling.LANCZOS)
-              resized_img.save(os.path.join(iconset_dir, f'icon_{size}x{size}.png'))
-              
-              # Retina icon (@2x)
-              resized_img_retina = img.resize((size * 2, size * 2), Image.Resampling.LANCZOS)
-              resized_img_retina.save(os.path.join(iconset_dir, f'icon_{size}x{size}@2x.png'))
-
-          print('Iconset created successfully.')
+              img.resize((size, size), Image.Resampling.LANCZOS).save(os.path.join(iconset_dir, f'icon_{size}x{size}.png'))
+              img.resize((size * 2, size * 2), Image.Resampling.LANCZOS).save(os.path.join(iconset_dir, f'icon_{size}x{size}@2x.png'))
           "
           iconutil -c icns icon.iconset -o app_icon.icns
 
@@ -59,26 +53,29 @@ jobs:
             --onefile \
             --windowed \
             --icon="app_icon.icns" \
-            --collect-data pandas # <-- THIS IS THE FIX
-
+            --collect-data pandas
+            
       - name: Create DMG
         run: |
           brew install create-dmg
-          
           mkdir -p dmg_assets
           mv "dist/SF Tagger" dmg_assets/
-          
           create-dmg \
             --volname "SF Tagger Installer" \
-            --window-pos 200 120 \
-            --window-size 600 380 \
+            --window-pos 200 120 --window-size 600 380 \
             --icon-size 100 \
             --icon "SF Tagger" 150 190 \
             --app-drop-link 450 190 \
             "SF_Tagger_macOS.dmg" \
             "dmg_assets/"
 
-      - name: Create Release
+      - name: Upload DMG as an Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SF_Tagger_macOS_DMG
+          path: SF_Tagger_macOS.dmg
+
+      - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
