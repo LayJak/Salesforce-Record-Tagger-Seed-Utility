@@ -23,25 +23,36 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install PySide6 pandas
+          pip install PySide6 pandas Pillow
           pip install pyinstaller==6.8.0
 
-      - name: Create .icns from .png for the app icon
+      - name: Create .icns from .png (Robust Method)
         run: |
-          mkdir -p icon.iconset
-          sips -z 16 16   icon.png --out icon.iconset/icon_16x16.png
-          sips -z 32 32   icon.png --out icon.iconset/icon_16x16@2x.png
-          sips -z 32 32   icon.png --out icon.iconset/icon_32x32.png
-          sips -z 64 64   icon.png --out icon.iconset/icon_32x32@2x.png
-          sips -z 128 128 icon.png --out icon.iconset/icon_128x128.png
-          sips -z 256 256 icon.png --out icon.iconset/icon_128x128@2x.png
-          sips -z 256 256 icon.png --out icon.iconset/icon_256x256.png
-          sips -z 512 512 icon.png --out icon.iconset/icon_256x256@2x.png
-          sips -z 512 512 icon.png --out icon.iconset/icon_512x512.png
-          sips -z 1024 1024 icon.png --out icon.iconset/icon_512x512@2x.png
-          iconutil -c icns icon.iconset
-          mv icon.icns app_icon.icns # PyInstaller uses this name by default
-          rm -rf icon.iconset
+          # Use the reliable Pillow library instead of the flaky 'sips' command
+          python -c "
+          from PIL import Image
+          import os
+
+          source_image = 'icon.png'
+          iconset_dir = 'icon.iconset'
+          os.makedirs(iconset_dir, exist_ok=True)
+
+          img = Image.open(source_image)
+          sizes = [16, 32, 128, 256, 512]
+
+          for size in sizes:
+              # Standard icon
+              resized_img = img.resize((size, size), Image.Resampling.LANCZOS)
+              resized_img.save(os.path.join(iconset_dir, f'icon_{size}x{size}.png'))
+              
+              # Retina icon (@2x)
+              resized_img_retina = img.resize((size * 2, size * 2), Image.Resampling.LANCZOS)
+              resized_img_retina.save(os.path.join(iconset_dir, f'icon_{size}x{size}@2x.png'))
+
+          print('Iconset created successfully.')
+          "
+          # Use the standard macOS utility to convert the iconset folder to a .icns file
+          iconutil -c icns icon.iconset -o app_icon.icns
 
       - name: Build macOS App with PyInstaller
         run: |
@@ -54,10 +65,8 @@ jobs:
             
       - name: Create DMG
         run: |
-          # Use homebrew to get the create-dmg tool
           brew install create-dmg
           
-          # Create a temporary folder for the DMG contents
           mkdir -p dmg_assets
           mv "dist/SF Tagger" dmg_assets/
           
