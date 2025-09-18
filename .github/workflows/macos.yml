@@ -2,16 +2,16 @@ name: macos-build-dmg-and-release
 
 on:
   push:
-    tags: ["v*.*.*"]            # push v1.0.0, v1.0.1, etc.
-  workflow_dispatch:            # manual runs; optional tag
+    tags: ["v*.*.*"]     # push v1.0.0 etc.
+  workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to publish (e.g., v1.0.0). Leave blank to only build artifacts."
+        description: "Release tag (e.g., v1.0.0). Leave blank to just build artifacts."
         required: false
         default: ""
 
 permissions:
-  contents: write               # needed to create/update releases
+  contents: write
 
 jobs:
   build:
@@ -24,12 +24,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Python deps
+      - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install -U pip
           if [ -f requirements ]; then
@@ -39,100 +40,73 @@ jobs:
           else
             pip install PySide6 pandas
           fi
-          pip install "pyinstaller==6.7.0"
+          pip install pyinstaller==6.7.0
 
-      - name: Generate .icns (optional)
+      - name: Generate .icns (optional from icon.png)
+        shell: bash
         run: |
           if [ -f "assets/icon.png" ]; then
             mkdir -p icon.iconset
             for s in 16 32 64 128 256 512; do
-              /usr/bin/sips -z $s $s assets/icon.png --out icon.iconset/icon_${s}x${s}.png > /dev/null
-              /usr/bin/sips -z $((s*2)) $((s*2)) assets/icon.png --out icon.iconset/icon_${s}x${s}@2x.png > /dev/null
+              /usr/bin/sips -z "$s" "$s" assets/icon.png --out "icon.iconset/icon_${s}x${s}.png" >/dev/null
+              /usr/bin/sips -z "$((s*2))" "$((s*2))" assets/icon.png --out "icon.iconset/icon_${s}x${s}@2x.png" >/dev/null
             done
             /usr/bin/iconutil -c icns icon.iconset -o assets/icon.icns
             rm -rf icon.iconset
           fi
 
-      - name: Build .app with PyInstaller (lean)
+      - name: Build .app with PyInstaller
+        shell: bash
         run: |
           ICON_FLAG=""
           if [ -f "assets/icon.icns" ]; then ICON_FLAG="--icon assets/icon.icns"; fi
 
-          EXCLUDES=(
-            PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DRender PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic
-            PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
-            PySide6.QtQuick PySide6.QtQuickWidgets PySide6.QtQuick3D PySide6.QtQuickControls2 PySide6.QtQuickTest
-            PySide6.QtBluetooth PySide6.QtCharts PySide6.QtDataVisualization PySide6.QtGraphs PySide6.QtGraphsWidgets
-            PySide6.QtHelp PySide6.QtHttpServer PySide6.QtLocation PySide6.QtNfc PySide6.QtPositioning
-            PySide6.QtPdf PySide6.QtPdfWidgets PySide6.QtRemoteObjects PySide6.QtScxml PySide6.QtSensors
-            PySide6.QtSerialBus PySide6.QtSerialPort PySide6.QtSpatialAudio PySide6.QtStateMachine
-            PySide6.QtSvg PySide6.QtSvgWidgets PySide6.QtTextToSpeech PySide6.QtUiTools
-            PySide6.QtWebSockets PySide6.QtWebView
-            PySide6.scripts PySide6.scripts.deploy PySide6.scripts.deploy_lib PySide6.scripts.project PySide6.scripts.project_lib
-            PySide6.QtDBus PySide6.QtSql
-            jinja2
-          )
-          EXCLUDE_FLAGS=""
-          for m in "${EXCLUDES[@]}"; do
-            EXCLUDE_FLAGS="$EXCLUDE_FLAGS --exclude-module $m"
-          done
-
+          # keep it lean: exclude big Qt modules we don't use
           pyinstaller Tagger.py \
             --name "SF Tagger" \
             --windowed \
             --noconfirm \
             $ICON_FLAG \
-            $EXCLUDE_FLAGS
+            --exclude-module PySide6.QtWebEngineCore \
+            --exclude-module PySide6.QtWebEngineWidgets \
+            --exclude-module PySide6.QtWebEngineQuick \
+            --exclude-module PySide6.Qt3DCore \
+            --exclude-module PySide6.Qt3DRender \
+            --exclude-module PySide6.Qt3DExtras \
+            --exclude-module PySide6.QtCharts \
+            --exclude-module PySide6.QtDataVisualization \
+            --exclude-module PySide6.QtQuick \
+            --exclude-module PySide6.QtQuickWidgets \
+            --exclude-module PySide6.QtBluetooth \
+            --exclude-module PySide6.QtLocation \
+            --exclude-module PySide6.QtNfc \
+            --exclude-module PySide6.QtSql \
+            --exclude-module PySide6.QtSvg \
+            --exclude-module PySide6.QtTextToSpeech
 
-          echo "dist contents:"
+          echo "Built contents of dist/:"
           ls -la dist || true
 
-      - name: Create DMG (robust: clean mounts, overwrite, retry)
+      - name: Create DMG (hdiutil)
+        shell: bash
         run: |
           set -e
-          DMG="dist/SF_Tagger-${{ matrix.runner }}.dmg"
-          VOL="SF Tagger"
+          APP_PATH="dist/SF Tagger.app"
+          DMG_PATH="dist/SF_Tagger-${{ matrix.runner }}.dmg"
+          VOL_NAME="SF Tagger"
 
-          mkdir -p dist
-          rm -f "$DMG"
-
-          if [ -d "/Volumes/$VOL" ]; then
-            hdiutil detach "/Volumes/$VOL" || diskutil unmount force "/Volumes/$VOL" || true
-            sleep 2
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App not found at $APP_PATH"
+            exit 1
           fi
 
-          if command -v brew >/dev/null 2>&1; then
-            brew install create-dmg || true
-          fi
+          rm -f "$DMG_PATH"
+          hdiutil create -volname "$VOL_NAME" \
+            -srcfolder "$APP_PATH" \
+            -ov -format UDZO "$DMG_PATH"
 
-          make_dmg() {
-            if command -v create-dmg >/dev/null 2>&1; then
-              create-dmg --overwrite \
-                --volname "$VOL" \
-                --window-pos 200 120 \
-                --window-size 600 400 \
-                --icon-size 128 \
-                --icon "SF Tagger.app" 160 200 \
-                --app-drop-link 440 200 \
-                "$DMG" "dist/SF Tagger.app"
-            else
-              hdiutil create -volname "$VOL" \
-                -srcfolder "dist/SF Tagger.app" \
-                -ov -format UDZO "$DMG"
-            fi
-          }
-
-          if ! make_dmg; then
-            echo "Retrying DMG creation…"
-            rm -f "$DMG" || true
-            if [ -d "/Volumes/$VOL" ]; then
-              hdiutil detach "/Volumes/$VOL" || diskutil unmount force "/Volumes/$VOL" || true
-              sleep 2
-            fi
-            make_dmg
-          fi
-
-          ls -la dist
+          echo "DMG created:"
+          ls -la "$DMG_PATH"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
@@ -147,27 +121,29 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || inputs.tag_name != ''
 
     steps:
-      - name: Download all DMG artifacts
+      - name: Download DMG artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: SF_Tagger_*
           merge-multiple: true
 
-      - name: Determine tag name
+      - name: Determine tag
         id: tag
+        shell: bash
         run: |
           if [ -n "${{ inputs.tag_name }}" ]; then
-            echo "name=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "name=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate checksums
+      - name: Checksums
+        shell: bash
         run: |
           shasum -a 256 SF_Tagger-*.dmg > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create/Update GitHub Release and upload assets
+      - name: Create/Update Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
@@ -179,7 +155,6 @@ jobs:
           prerelease: false
           make_latest: true
           generate_release_notes: true
-          fail_on_unmatched_files: true
           allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
