@@ -46,17 +46,20 @@ jobs:
             rm -rf icon.iconset
           fi
 
-      - name: Write minimal PyInstaller spec (avoid Qt symlink collisions)
+      - name: Write minimal PyInstaller spec (Tree copy of essential Qt plugins)
         run: |
           cat > sftagger.spec << 'PYI'
           # -*- mode: python ; coding: utf-8 -*-
-          import sys, os
-          from PyInstaller.utils.hooks import collect_data_files, collect_qt_plugins
+          import os
+          from PyInstaller.utils.hooks import collect_data_files, get_package_paths
+          from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
+          from PyInstaller.utils.hooks import collect_dynamic_libs
+          from PyInstaller.building.datastruct import Tree
 
-          app_name = "SF Tagger"
-          script = "Tagger.py"
+          APP_NAME = "SF Tagger"
+          SCRIPT = "Tagger.py"
 
-          # Exclude heavy/unused PySide6 modules that can pull in extra frameworks
+          # Exclude heavy/unused PySide6 modules to prevent Qt3D/WebEngine framework collisions
           EXCLUDES = [
               "PySide6.Qt3DAnimation","PySide6.Qt3DCore","PySide6.Qt3DRender","PySide6.Qt3DExtras","PySide6.Qt3DInput","PySide6.Qt3DLogic",
               "PySide6.QtWebEngineCore","PySide6.QtWebEngineWidgets","PySide6.QtWebEngineQuick",
@@ -68,14 +71,13 @@ jobs:
               "PySide6.QtSvg","PySide6.QtSvgWidgets","PySide6.QtTextToSpeech","PySide6.QtUiTools",
               "PySide6.QtWebSockets","PySide6.QtWebView",
               "PySide6.scripts","PySide6.scripts.deploy","PySide6.scripts.deploy_lib","PySide6.scripts.project","PySide6.scripts.project_lib",
-              "PySide6.QtDBus","PySide6.QtSql",  # drop SQL (avoids qsql* driver deps)
-              "jinja2"  # not used; PyInstaller warned about it
+              "PySide6.QtDBus","PySide6.QtSql",   # drop SQL drivers
+              "jinja2"
           ]
 
-          block_cipher = None
-
+          # Base analysis
           a = Analysis(
-              [script],
+              [SCRIPT],
               pathex=[],
               binaries=[],
               datas=[],
@@ -87,19 +89,24 @@ jobs:
               noarchive=False,
           )
 
-          # pandas data files
-          a.datas += collect_data_files('pandas')
+          # Include pandas data
+          a.datas += collect_data_files("pandas")
 
-          # Only the Qt plugins we need for a widgets app
-          # (platforms, styles, imageformats, printsupport)
-          qt_plugins = ['platforms', 'styles', 'imageformats', 'printsupport']
-          for _name, files in collect_qt_plugins('PySide6', qt_plugins).items():
-              # files is a list of (dest_dir, src_file) tuples; PyInstaller handles them
-              a.binaries += files
+          # Discover PySide6 package path, then include only needed Qt plugins
+          pkg_base, pkg_dir = get_package_paths("PySide6")
+          qt_plugins_dir = os.path.join(pkg_dir, "Qt", "plugins")
+          needed = ["platforms", "styles", "imageformats", "printsupport"]
+          for sub in needed:
+              src = os.path.join(qt_plugins_dir, sub)
+              if os.path.isdir(src):
+                  # Place under PySide6/Qt/plugins/<sub> inside the bundle
+                  a.datas += Tree(src, prefix=os.path.join("PySide6", "Qt", "plugins", sub))
 
-          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+          # (Optional) include PySide6 shared libs if PyInstaller misses any
+          a.binaries += collect_dynamic_libs("PySide6")
 
-          # EXE target (console=False => windowed)
+          pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+
           exe = EXE(
               pyz,
               a.scripts,
@@ -107,7 +114,7 @@ jobs:
               a.zipfiles,
               a.datas,
               [],
-              name=app_name,
+              name=APP_NAME,
               debug=False,
               bootloader_ignore_signals=False,
               strip=False,
@@ -120,15 +127,12 @@ jobs:
               target_arch=None,
           )
 
-          # macOS .app bundle
           app = BUNDLE(
               exe,
-              name=f"{app_name}.app",
+              name=f"{APP_NAME}.app",
               icon="assets/icon.icns" if os.path.exists("assets/icon.icns") else None,
               bundle_identifier="com.northrop.sftagger",
-              info_plist={
-                  "NSHighResolutionCapable": True,
-              },
+              info_plist={"NSHighResolutionCapable": True},
           )
 
           coll = COLLECT(
@@ -139,7 +143,7 @@ jobs:
               strip=False,
               upx=False,
               upx_exclude=[],
-              name=app_name,
+              name=APP_NAME,
           )
           PYI
 
