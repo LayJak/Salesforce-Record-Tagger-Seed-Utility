@@ -46,18 +46,41 @@ jobs:
             rm -rf icon.iconset
           fi
 
-      - name: Build .app with PyInstaller
+      - name: Build .app with PyInstaller (exclude unused PySide6 modules)
         run: |
           ICON_FLAG=""
           if [ -f "assets/icon.icns" ]; then ICON_FLAG="--icon assets/icon.icns"; fi
-          # For PySide6, prefer one-folder app bundle; include Qt plugins & pandas data
+
+          # Exclude big/unused Qt modules that can cause framework symlink collisions
+          EXCLUDES=(
+            PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DRender PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic
+            PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
+            PySide6.QtQuick PySide6.QtQuickWidgets PySide6.QtQuick3D PySide6.QtQuickControls2 PySide6.QtQuickTest
+            PySide6.QtBluetooth PySide6.QtCharts PySide6.QtDataVisualization PySide6.QtGraphs PySide6.QtGraphsWidgets
+            PySide6.QtHelp PySide6.QtHttpServer PySide6.QtLocation PySide6.QtNfc PySide6.QtPositioning
+            PySide6.QtPdf PySide6.QtPdfWidgets PySide6.QtRemoteObjects PySide6.QtScxml PySide6.QtSensors
+            PySide6.QtSerialBus PySide6.QtSerialPort PySide6.QtSpatialAudio PySide6.QtStateMachine
+            PySide6.QtSvg PySide6.QtSvgWidgets PySide6.QtTextToSpeech PySide6.QtUiTools
+            PySide6.QtWebSockets PySide6.QtWebView
+            PySide6.scripts PySide6.scripts.deploy PySide6.scripts.deploy_lib PySide6.scripts.project PySide6.scripts.project_lib
+            PySide6.QtDBus PySide6.QtSql   # drop DB/SQL drivers (removes sqldrivers warnings)
+          )
+
+          EXCLUDE_FLAGS=""
+          for m in "${EXCLUDES[@]}"; do
+            EXCLUDE_FLAGS="$EXCLUDE_FLAGS --exclude-module $m"
+          done
+
           pyinstaller Tagger.py \
             --name "SF Tagger" \
             --windowed \
             $ICON_FLAG \
             --noconfirm \
             --collect-all PySide6 \
-            --collect-data pandas
+            --collect-data pandas \
+            $EXCLUDE_FLAGS
+
+          echo "Built files in dist/:"
           ls -la "dist"
 
       - name: Create DMG (prefer create-dmg, fallback to hdiutil)
