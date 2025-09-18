@@ -3,8 +3,8 @@ name: Build macOS DMG and Release
 on:
   push:
     tags:
-      - 'v*.*.*'        # push v1.0.3 etc. to publish
-  workflow_dispatch:      # manual run also supported
+      - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,43 +22,31 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies (pinned)
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install -U pip
-          # App deps + Pillow for icon generation
+          # App deps (pinning is good practice)
           pip install PySide6 pandas==2.2.2 numpy==1.26.4 Pillow
-          # Build tooling
-          pip install pyinstaller==6.7.0 pyinstaller-hooks-contrib>=2024.7
+          # Build tooling (use the latest stable versions)
+          pip install pyinstaller
 
-      - name: Generate .icns (Robust Method)
+      - name: Generate .icns
         shell: bash
         run: |
-          # Use the reliable Pillow library instead of the flaky 'sips' command
-          python -c "
-          from PIL import Image
-          import os
+          set -euo pipefail
+          if [ -f "icon.png" ]; then
+            mkdir -p icon.iconset
+            for s in 16 32 64 128 256 512; do
+              sips -z "$s" "$s" icon.png --out "icon.iconset/icon_${s}x${s}.png" >/dev/null
+              sips -z "$((s*2))" "$((s*2))" icon.png --out "icon.iconset/icon_${s}x${s}@2x.png" >/dev/null
+            done
+            iconutil -c icns icon.iconset -o icon.icns
+            rm -rf icon.iconset
+          fi
 
-          source_image = 'icon.png'
-          iconset_dir = 'icon.iconset'
-          output_icon = 'icon.icns'
-          os.makedirs(iconset_dir, exist_ok=True)
-
-          img = Image.open(source_image)
-          sizes = [16, 32, 64, 128, 256, 512]
-
-          for size in sizes:
-              img.resize((size, size), Image.Resampling.LANCZOS).save(os.path.join(iconset_dir, f'icon_{size}x{size}.png'))
-              img.resize((size * 2, size * 2), Image.Resampling.LANCZOS).save(os.path.join(iconset_dir, f'icon_{size}x{size}@2x.png'))
-          "
-          # Use the standard macOS utility to convert the iconset folder to a .icns file
-          iconutil -c icns icon.iconset -o icon.icns
-          rm -rf icon.iconset
-          echo "Generated icon.icns"
-
-
-      - name: Build .app with PyInstaller (no --onefile)
+      - name: Build .app with PyInstaller
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
         shell: bash
@@ -66,11 +54,9 @@ jobs:
           set -euo pipefail
           rm -rf build dist "SF Tagger.spec" || true
 
-          # FIX: Corrected path for the icon flag
           ICON_FLAG=""
           [ -f "icon.icns" ] && ICON_FLAG="--icon icon.icns"
 
-          # Exclude heavy/unneeded Qt modules
           EXCLUDES=(
             PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic PySide6.Qt3DRender
             PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
@@ -144,6 +130,7 @@ jobs:
             **SF Tagger – macOS**
 
             1) Open the DMG  
-            2) Drag **SF Tagger.app** → **Applications** 3) First launch: right-click **SF Tagger.app** → **Open** → **Open** (unsigned; one-time Gatekeeper prompt)
+            2) Drag **SF Tagger.app** → **Applications**
+            3) First launch: right-click **SF Tagger.app** → **Open** → **Open** (unsigned; one-time Gatekeeper prompt)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
