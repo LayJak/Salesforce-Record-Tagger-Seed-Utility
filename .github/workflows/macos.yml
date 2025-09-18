@@ -28,7 +28,6 @@ jobs:
 
       - name: Create .icns from .png (Robust Method)
         run: |
-          # Use the reliable Pillow library instead of the flaky 'sips' command
           python -c "
           from PIL import Image
           import os
@@ -51,7 +50,6 @@ jobs:
 
           print('Iconset created successfully.')
           "
-          # Use the standard macOS utility to convert the iconset folder to a .icns file
           iconutil -c icns icon.iconset -o app_icon.icns
 
       - name: Build macOS App with PyInstaller
@@ -61,8 +59,8 @@ jobs:
             --onefile \
             --windowed \
             --icon="app_icon.icns" \
-            --add-data="pandas:pandas"
-            
+            --collect-data pandas # <-- THIS IS THE FIX
+
       - name: Create DMG
         run: |
           brew install create-dmg
