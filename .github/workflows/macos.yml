@@ -3,7 +3,7 @@ name: Build macOS DMG and Release
 on:
   push:
     tags:
-      - "v*.*.*"          # e.g., v1.0.4
+      - "v*.*.*"          # e.g., v1.0.6
   workflow_dispatch: {}
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: macos-latest  # Apple Silicon runner
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
@@ -27,12 +27,10 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -U pip
-          # App deps
           pip install PySide6==6.9.2 pandas==2.2.2 numpy==1.26.4
-          # Build tools
           pip install pyinstaller==6.8.0 pyinstaller-hooks-contrib Pillow
 
-      # Optional: generate assets/icon.icns from assets/icon.png
+      # Optional: create assets/icon.icns from assets/icon.png
       - name: Generate .icns (optional)
         shell: bash
         run: |
@@ -47,7 +45,7 @@ jobs:
             rm -rf icon.iconset
           fi
 
-      - name: Build .app with PyInstaller (no --onefile)
+      - name: Build .app with PyInstaller (bundle, not onefile)
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
         shell: bash
@@ -55,62 +53,95 @@ jobs:
           set -euo pipefail
           rm -rf build dist "SF Tagger.spec" || true
 
-          ICON_FLAG=()
+          # Use simple strings (avoid arrays to prevent 'unbound variable')
+          ICON_FLAG=""
           if [ -f "assets/icon.icns" ]; then
-            ICON_FLAG=(--icon "assets/icon.icns")
+            ICON_FLAG='--icon "assets/icon.icns"'
           fi
 
-          # Exclude heavy Qt modules only (keep core GUI bits)
-          EXCLUDES=(
-            PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic PySide6.Qt3DRender
-            PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
-            PySide6.QtQuick3D PySide6.QtQuickControls2 PySide6.QtQuickTest
-            PySide6.QtCharts PySide6.QtDataVisualization PySide6.QtGraphs PySide6.QtGraphsWidgets
-            PySide6.QtHelp PySide6.QtHttpServer PySide6.QtLocation PySide6.QtNfc PySide6.QtPositioning
-            PySide6.QtMultimedia PySide6.QtMultimediaWidgets
-            PySide6.QtNetworkAuth
-            PySide6.QtOpenGL PySide6.QtOpenGLWidgets
-            PySide6.QtPdf PySide6.QtPdfWidgets
-            PySide6.QtRemoteObjects PySide6.QtScxml PySide6.QtSensors
-            PySide6.QtSerialBus PySide6.QtSerialPort PySide6.QtSpatialAudio
-            PySide6.QtStateMachine
-            PySide6.QtSvg PySide6.QtSvgWidgets
-            PySide6.QtTextToSpeech PySide6.QtTest
-            PySide6.QtUiTools
-            PySide6.QtWebChannel PySide6.QtWebSockets PySide6.QtWebView
-            PySide6.QtXml
-            PySide6.QtSql
-            PySide6.scripts PySide6.scripts.deploy PySide6.scripts.deploy_lib PySide6.scripts.project PySide6.scripts.project_lib
-          )
-          EXCLUDE_FLAGS=()
-          for m in "${EXCLUDES[@]}"; do
-            EXCLUDE_FLAGS+=(--exclude-module "$m")
-          done
+          # Exclude heavy/unneeded Qt modules to reduce size
+          EXCLUDE_FLAGS="\
+            --exclude-module PySide6.Qt3DAnimation \
+            --exclude-module PySide6.Qt3DCore \
+            --exclude-module PySide6.Qt3DExtras \
+            --exclude-module PySide6.Qt3DInput \
+            --exclude-module PySide6.Qt3DLogic \
+            --exclude-module PySide6.Qt3DRender \
+            --exclude-module PySide6.QtWebEngineCore \
+            --exclude-module PySide6.QtWebEngineWidgets \
+            --exclude-module PySide6.QtWebEngineQuick \
+            --exclude-module PySide6.QtQuick3D \
+            --exclude-module PySide6.QtQuickControls2 \
+            --exclude-module PySide6.QtQuickTest \
+            --exclude-module PySide6.QtCharts \
+            --exclude-module PySide6.QtDataVisualization \
+            --exclude-module PySide6.QtGraphs \
+            --exclude-module PySide6.QtGraphsWidgets \
+            --exclude-module PySide6.QtHelp \
+            --exclude-module PySide6.QtHttpServer \
+            --exclude-module PySide6.QtLocation \
+            --exclude-module PySide6.QtNfc \
+            --exclude-module PySide6.QtPositioning \
+            --exclude-module PySide6.QtMultimedia \
+            --exclude-module PySide6.QtMultimediaWidgets \
+            --exclude-module PySide6.QtNetworkAuth \
+            --exclude-module PySide6.QtOpenGL \
+            --exclude-module PySide6.QtOpenGLWidgets \
+            --exclude-module PySide6.QtPdf \
+            --exclude-module PySide6.QtPdfWidgets \
+            --exclude-module PySide6.QtRemoteObjects \
+            --exclude-module PySide6.QtScxml \
+            --exclude-module PySide6.QtSensors \
+            --exclude-module PySide6.QtSerialBus \
+            --exclude-module PySide6.QtSerialPort \
+            --exclude-module PySide6.QtSpatialAudio \
+            --exclude-module PySide6.QtStateMachine \
+            --exclude-module PySide6.QtSvg \
+            --exclude-module PySide6.QtSvgWidgets \
+            --exclude-module PySide6.QtTextToSpeech \
+            --exclude-module PySide6.QtTest \
+            --exclude-module PySide6.QtUiTools \
+            --exclude-module PySide6.QtWebChannel \
+            --exclude-module PySide6.QtWebSockets \
+            --exclude-module PySide6.QtWebView \
+            --exclude-module PySide6.QtXml \
+            --exclude-module PySide6.QtSql \
+            --exclude-module PySide6.scripts \
+            --exclude-module PySide6.scripts.deploy \
+            --exclude-module PySide6.scripts.deploy_lib \
+            --exclude-module PySide6.scripts.project \
+            --exclude-module PySide6.scripts.project_lib \
+          "
 
-          # Find PySide6 plugin root and add essential plugin folders
-          PLUG_BASE="$(python -c 'import PySide6,os; print(os.path.join(PySide6.__path__[0], "Qt", "plugins"))')"
-          ADD_DATA_ARGS=()
+          # Bundle essential Qt plugins explicitly
+          PLUG_BASE="$(python - <<'PY'
+import PySide6, os
+print(os.path.join(PySide6.__path__[0], "Qt", "plugins"))
+PY
+)"
+          ADD_DATA_ARGS=""
           for d in platforms imageformats styles tls; do
             if [ -d "${PLUG_BASE}/${d}" ]; then
-              ADD_DATA_ARGS+=(--add-data "${PLUG_BASE}/${d}:PySide6/Qt/plugins/${d}")
+              ADD_DATA_ARGS="${ADD_DATA_ARGS} --add-data \"${PLUG_BASE}/${d}:PySide6/Qt/plugins/${d}\""
             fi
           done
 
-          pyinstaller Tagger.py \
-            --name "SF Tagger" \
+          # Run PyInstaller (string expansion safe under set -u)
+          eval pyinstaller Tagger.py \
+            --name \"SF Tagger\" \
             --windowed \
             --noconfirm \
-            "${ICON_FLAG[@]}" \
-            "${EXCLUDE_FLAGS[@]}" \
+            ${ICON_FLAG:-} \
+            ${EXCLUDE_FLAGS} \
             --collect-data pandas \
-            --osx-bundle-identifier "com.northrop.sftagger" \
+            --osx-bundle-identifier \"com.northrop.sftagger\" \
             --log-level=INFO \
-            "${ADD_DATA_ARGS[@]}"
+            ${ADD_DATA_ARGS}
 
-          echo "dist contents:" && ls -la dist
+          echo "dist contents:" && ls -la "dist"
           [ -d "dist/SF Tagger.app" ] || (echo "❌ App bundle missing" && exit 1)
 
-          # Ad-hoc sign to reduce Gatekeeper friction (not notarized)
+          # Ad-hoc sign (not notarized) so users can right-click→Open
           codesign --force --deep -s - "dist/SF Tagger.app" || true
 
       - name: Create DMG
