@@ -3,7 +3,7 @@ name: Build macOS DMG and Release
 on:
   push:
     tags:
-      - "v*.*.*"     # e.g. v1.0.6 -> builds + publishes a Release
+      - "v*.*.*"     # e.g. v1.0.7
   workflow_dispatch: {}
 
 permissions:
@@ -30,7 +30,6 @@ jobs:
           pip install PySide6==6.9.2 pandas==2.2.2 numpy==1.26.4
           pip install pyinstaller==6.8.0 pyinstaller-hooks-contrib Pillow
 
-      # Optional: create assets/icon.icns from assets/icon.png
       - name: Generate .icns (optional)
         shell: bash
         run: |
@@ -58,7 +57,6 @@ jobs:
             ICON_FLAG='--icon assets/icon.icns'
           fi
 
-          # Exclude heavy/unneeded Qt modules to reduce size
           EXCLUDE_FLAGS="\
             --exclude-module PySide6.Qt3DAnimation \
             --exclude-module PySide6.Qt3DCore \
@@ -112,7 +110,6 @@ jobs:
             --exclude-module PySide6.scripts.project_lib \
           "
 
-          # Find Qt plugins directory (no heredoc; YAML-safe)
           PLUG_BASE="$(python -c 'import PySide6, os; print(os.path.join(PySide6.__path__[0], "Qt", "plugins"))')"
 
           ADD_DATA_ARGS=""
@@ -136,20 +133,23 @@ jobs:
           echo "dist contents:" && ls -la "dist"
           [ -d "dist/SF Tagger.app" ] || (echo "❌ App bundle missing" && exit 1)
 
-          # Ad-hoc sign (unsigned but launchable via right-click → Open)
+          # Ad-hoc sign so users can right-click → Open
           codesign --force --deep -s - "dist/SF Tagger.app" || true
 
-      - name: Create DMG
+      - name: Create DMG (no --overwrite)
         shell: bash
         run: |
           set -e
           brew install create-dmg || true
           DMG="SF_Tagger_macOS.dmg"
           VOL="SF Tagger"
+
+          # Clean up any stale mounts / files
           hdiutil detach "/Volumes/${VOL}" >/dev/null 2>&1 || true
           rm -f "$DMG"
+
           if command -v create-dmg >/dev/null 2>&1; then
-            create-dmg --overwrite \
+            create-dmg \
               --volname "${VOL}" \
               --window-pos 200 120 --window-size 600 400 \
               --icon-size 128 \
@@ -159,6 +159,7 @@ jobs:
           else
             hdiutil create -volname "${VOL}" -srcfolder "dist/SF Tagger.app" -ov -format UDZO "$DMG"
           fi
+
           ls -la "$DMG"
 
       - name: Upload DMG artifact
