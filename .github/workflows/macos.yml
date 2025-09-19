@@ -3,16 +3,15 @@ name: Build macOS DMG and Release
 on:
   push:
     tags:
-      - 'v*.*.*'            # e.g. v1.0.4
-  workflow_dispatch:        # manual run supported
+      - "v*.*.*"          # e.g., v1.0.4
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
   build-and-release:
-    # For Intel too, duplicate job with runs-on: macos-13 and change DMG name.
-    runs-on: macos-latest   # Apple Silicon runner
+    runs-on: macos-latest  # Apple Silicon runner
 
     steps:
       - name: Checkout repository
@@ -21,7 +20,7 @@ jobs:
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies (pinned)
         shell: bash
@@ -31,9 +30,9 @@ jobs:
           # App deps
           pip install PySide6==6.9.2 pandas==2.2.2 numpy==1.26.4
           # Build tools
-          pip install pyinstaller==6.8.0 pyinstaller-hooks-contrib>=2024.7 Pillow
+          pip install pyinstaller==6.8.0 pyinstaller-hooks-contrib Pillow
 
-      # Optional: generate .icns from a PNG if you don't already have assets/icon.icns
+      # Optional: generate assets/icon.icns from assets/icon.png
       - name: Generate .icns (optional)
         shell: bash
         run: |
@@ -56,11 +55,12 @@ jobs:
           set -euo pipefail
           rm -rf build dist "SF Tagger.spec" || true
 
-          ICON_FLAG=""
-          [ -f "assets/icon.icns" ] && ICON_FLAG="--icon assets/icon.icns"
+          ICON_FLAG=()
+          if [ -f "assets/icon.icns" ]; then
+            ICON_FLAG=(--icon "assets/icon.icns")
+          fi
 
-          # Only exclude heavy Qt modules that cause bloat/symlink issues;
-          # DO NOT exclude core GUI modules.
+          # Exclude heavy Qt modules only (keep core GUI bits)
           EXCLUDES=(
             PySide6.Qt3DAnimation PySide6.Qt3DCore PySide6.Qt3DExtras PySide6.Qt3DInput PySide6.Qt3DLogic PySide6.Qt3DRender
             PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
@@ -82,40 +82,35 @@ jobs:
             PySide6.QtSql
             PySide6.scripts PySide6.scripts.deploy PySide6.scripts.deploy_lib PySide6.scripts.project PySide6.scripts.project_lib
           )
-          EXCLUDE_FLAGS=""
+          EXCLUDE_FLAGS=()
           for m in "${EXCLUDES[@]}"; do
-            EXCLUDE_FLAGS+=" --exclude-module $m"
+            EXCLUDE_FLAGS+=(--exclude-module "$m")
           done
 
-          # Dynamically locate the PySide6 plugin directory and add essential plugins.
-          PLUG_BASE=$(python - <<'PY'
-import PySide6, os
-print(os.path.join(PySide6.__path__[0], "Qt", "plugins"))
-PY
-)
-          ADD_DATA=""
+          # Find PySide6 plugin root and add essential plugin folders
+          PLUG_BASE="$(python -c 'import PySide6,os; print(os.path.join(PySide6.__path__[0], "Qt", "plugins"))')"
+          ADD_DATA_ARGS=()
           for d in platforms imageformats styles tls; do
-            if [ -d "$PLUG_BASE/$d" ]; then
-              ADD_DATA+=" --add-data \"$PLUG_BASE/$d:PySide6/Qt/plugins/$d\""
+            if [ -d "${PLUG_BASE}/${d}" ]; then
+              ADD_DATA_ARGS+=(--add-data "${PLUG_BASE}/${d}:PySide6/Qt/plugins/${d}")
             fi
           done
 
-          # Build GUI app bundle
-          eval pyinstaller Tagger.py \
-            --name \"SF Tagger\" \
+          pyinstaller Tagger.py \
+            --name "SF Tagger" \
             --windowed \
             --noconfirm \
-            $ICON_FLAG \
-            $EXCLUDE_FLAGS \
+            "${ICON_FLAG[@]}" \
+            "${EXCLUDE_FLAGS[@]}" \
             --collect-data pandas \
-            --osx-bundle-identifier com.northrop.sftagger \
+            --osx-bundle-identifier "com.northrop.sftagger" \
             --log-level=INFO \
-            $ADD_DATA
+            "${ADD_DATA_ARGS[@]}"
 
           echo "dist contents:" && ls -la dist
           [ -d "dist/SF Tagger.app" ] || (echo "❌ App bundle missing" && exit 1)
 
-          # Ad-hoc sign (not notarized). Helps reduce Gatekeeper nags.
+          # Ad-hoc sign to reduce Gatekeeper friction (not notarized)
           codesign --force --deep -s - "dist/SF Tagger.app" || true
 
       - name: Create DMG
@@ -156,13 +151,6 @@ PY
             **SF Tagger – macOS (Unsigned)**
             1) Open the DMG  
             2) Drag **SF Tagger.app** → **Applications**  
-            3) On first launch: right-click **SF Tagger.app** → **Open** → **Open** (one-time Gatekeeper prompt)
+            3) First launch: right-click **SF Tagger.app** → **Open** → **Open** (one-time Gatekeeper prompt)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ----- OPTIONAL: build Intel DMG too -----
-  # build-and-release-intel:
-  #   runs-on: macos-13
-  #   steps:
-  #     # repeat the same steps as above,
-  #     # and name the DMG "SF_Tagger_macOS_Intel.dmg"
